@@ -139,4 +139,146 @@ def verificar_empate(tabuleiro):
 
 # --- Funções da Lógica de Rede CORRIGIDAS ---
 def get_ip_family(host):
+"""Determina a família do endereço IP (IPv4 ou IPv6) e retorna a string."""
+    try:
+        ip = ipaddress.ip_address(host)
+        return 'IPv4' if isinstance(ip, ipaddress.IPv4Address) else 'IPv6'
+    except ValueError:
+        return 'Inválido'
+
+def criar_socket_comunicacao(protocolo, host, porta):
+    """Cria e configura um socket para comunicação, tratando corretamente o IPv6."""
+    try:
+        addr_info = socket.getaddrinfo(host, porta, socket.AF_UNSPEC,
+                                       socket.SOCK_STREAM if protocolo == 'tcp' else socket.SOCK_DGRAM)
+        
+        af, socktype, proto, canonname, sa = addr_info[0]
+
+        sock = socket.socket(af, socktype, proto)
+        
+        return sock, sa
+    
+    except socket.gaierror as e:
+        estado_jogo['mensagens'].append(f"Erro de endereço: {e}")
+        return None, None
+    except Exception as e:
+        estado_jogo['mensagens'].append(f"Erro ao criar o socket: {e}")
+        return None, None
+
+def enviar_dados(sock, dados, protocolo, oponente_addr=None):
+    """Serializa e envia os dados."""
+    payload = json.dumps(dados).encode('utf-8')
+    try:
+        if protocolo == 'tcp':
+            sock.sendall(payload)
+        else:
+            if oponente_addr:
+                sock.sendto(payload, oponente_addr)
+        return True
+    except (socket.timeout, ConnectionResetError, BrokenPipeError) as e:
+        print(f"Erro de envio: {e}")
+        return False
+    except Exception as e:
+        print(f"Erro ao enviar dados: {e}")
+        return False
+
+def receber_dados(sock, protocolo, buffer_size=4096):
+    """Recebe e desserializa os dados."""
+    try:
+        if protocolo == 'tcp':
+            sock.settimeout(0.1)
+            payload = sock.recv(buffer_size)
+            if not payload:
+                return None, None
+            return json.loads(payload.decode('utf-8')), None
+        else:
+            sock.settimeout(0.1)
+            payload, addr = sock.recvfrom(buffer_size)
+            if not payload:
+                return None, None
+            return json.loads(payload.decode('utf-8')), addr
+    except socket.timeout:
+        return None, None
+    except (ConnectionResetError, ConnectionAbortedError) as e:
+        print(f"Conexão perdida: {e}")
+        return {'status': 'desconexao'}, None
+    except Exception as e:
+        print(f"Erro ao receber dados: {e}")
+        return None, None
+
+def thread_servidor_tcp(sock, addr):
+    global sock_comunicacao, oponente_addr, rodando_jogo, estado_jogo, conectado
+    
+    with lock_rede:
+        estado_jogo['mensagens'].append("Aguardando oponente...")
+    
+    try:
+        sock.bind(addr)
+        sock.listen(1)
+        
+        sock.settimeout(1.0)
+        while rodando_jogo and not conectado:
+            try:
+                conn, addr = sock.accept()
+                with lock_rede:
+                    sock_comunicacao = conn
+                    oponente_addr = addr
+                    estado_jogo['mensagens'] = ["Oponente conectado!"]
+                    conectado = True
+                sock_comunicacao.settimeout(0.1)
+            except socket.timeout:
+                continue
+    except Exception as e:
+        with lock_rede:
+            estado_jogo['mensagens'].append(f"Erro no servidor TCP: {e}")
+            rodando_jogo = False
+        return
+
+    while rodando_jogo:
+        dados, _ = receber_dados(sock_comunicacao, 'tcp')
+        if dados:
+            if dados.get('status') == 'desconexao':
+                with lock_rede:
+                    estado_jogo['mensagens'].append("Conexão perdida com o oponente.")
+                    rodando_jogo = False
+            else:
+                with lock_rede:
+                    estado_jogo['tabuleiro'] = dados.get('tabuleiro', estado_jogo['tabuleiro'])
+                    estado_jogo['turno'] = 'X' if estado_jogo['turno'] == 'O' else 'O'
+        time.sleep(0.01)
+    
+    if sock_comunicacao:
+        sock_comunicacao.close()
+    if sock:
+        sock.close()
+
+def thread_cliente_tcp(sock, addr):
+    global sock_comunicacao, oponente_addr, rodando_jogo, estado_jogo, conectado
+    
+    host_display = addr[0]
+    with lock_rede:
+        estado_jogo['mensagens'].append(f"Conectando a {host_display}:{addr[1]}...")
+    
+    try:
+        sock.connect(addr)
+        with lock_rede:
+            sock_comunicacao = sock
+            oponente_addr = addr
+            estado_jogo['mensagens'] = ["Conectado ao servidor!"]
+            conectado = True
+        sock_comunicacao.settimeout(0.1)
+    except ConnectionRefusedError:
+        with lock_rede:
+            estado_jogo['mensagens'].append("Conexão recusada pelo servidor.")
+            rodando_jogo = False
+        return
+    except Exception as e:
+        with lock_rede:
+            estado_jogo['mensagens'].append(f"Erro ao conectar: {e}")
+            rodando_jogo = False
+        return
+
+    while rodando_jogo:
+        dados, _ = receber_dados(sock_comunicacao, 'tcp')
+        if dados:
 
