@@ -281,4 +281,145 @@ def thread_cliente_tcp(sock, addr):
     while rodando_jogo:
         dados, _ = receber_dados(sock_comunicacao, 'tcp')
         if dados:
+if dados.get('status') == 'desconexao':
+                with lock_rede:
+                    estado_jogo['mensagens'].append("Conexão perdida com o oponente.")
+                    rodando_jogo = False
+            else:
+                with lock_rede:
+                    estado_jogo['tabuleiro'] = dados.get('tabuleiro', estado_jogo['tabuleiro'])
+                    estado_jogo['turno'] = 'X' if estado_jogo['turno'] == 'O' else 'O'
+        time.sleep(0.01)
+        
+    if sock_comunicacao:
+        sock_comunicacao.close()
+    if sock:
+        sock.close()
+
+def thread_servidor_udp(sock, addr):
+    global sock_comunicacao, oponente_addr, rodando_jogo, estado_jogo, conectado
+    
+    with lock_rede:
+        estado_jogo['mensagens'].append("Aguardando oponente...")
+    sock.bind(addr)
+    
+    while rodando_jogo and not conectado:
+        dados, client_addr = receber_dados(sock, 'udp')
+        if dados and dados.get('msg') == 'HELLO':
+            with lock_rede:
+                oponente_addr = client_addr
+                sock_comunicacao = sock
+            enviar_dados(sock_comunicacao, {'msg': 'HELLO'}, 'udp', oponente_addr)
+            with lock_rede:
+                estado_jogo['mensagens'] = ["Oponente conectado!"]
+                conectado = True
+            break
+        time.sleep(0.01)
+
+    while rodando_jogo:
+        dados, addr_recebido = receber_dados(sock_comunicacao, 'udp')
+        if dados:
+            with lock_rede:
+                oponente_addr = addr_recebido or oponente_addr
+                estado_jogo['tabuleiro'] = dados.get('tabuleiro', estado_jogo['tabuleiro'])
+                estado_jogo['turno'] = 'X' if estado_jogo['turno'] == 'O' else 'O'
+        time.sleep(0.01)
+    
+    if sock:
+        sock.close()
+
+def thread_cliente_udp(sock, addr):
+    global sock_comunicacao, oponente_addr, rodando_jogo, estado_jogo, conectado
+    
+    host_display = addr[0]
+    with lock_rede:
+        estado_jogo['mensagens'].append(f"Conectando a {host_display}:{addr[1]}...")
+        oponente_addr = addr
+        sock_comunicacao = sock
+
+    inicio_tempo = time.time()
+    while rodando_jogo and not conectado and (time.time() - inicio_tempo) < 10:
+        enviar_dados(sock_comunicacao, {'msg': 'HELLO'}, 'udp', oponente_addr)
+        dados, addr_recebido = receber_dados(sock_comunicacao, 'udp')
+        if dados and dados.get('msg') == 'HELLO':
+            with lock_rede:
+                estado_jogo['mensagens'] = ["Conectado ao servidor!"]
+                conectado = True
+            break
+        time.sleep(0.5)
+    
+    if not conectado:
+        with lock_rede:
+            estado_jogo['mensagens'].append("Não foi possível conectar ao servidor UDP.")
+            rodando_jogo = False
+        if sock:
+            sock.close()
+        return
+
+    while rodando_jogo:
+        dados, addr_recebido = receber_dados(sock_comunicacao, 'udp')
+        if dados:
+            with lock_rede:
+                oponente_addr = addr_recebido or oponente_addr
+                estado_jogo['tabuleiro'] = dados.get('tabuleiro', estado_jogo['tabuleiro'])
+                estado_jogo['turno'] = 'X' if estado_jogo['turno'] == 'O' else 'O'
+        time.sleep(0.01)
+
+    if sock:
+        sock.close()
+
+# --- Loop principal do menu de configuração ---
+def main_menu():
+    config = {'protocolo': None, 'modo': None, 'host': '127.0.0.1', 'porta': '5555'}
+    estado_menu = 'PROTOCOLO'
+    input_ativo = None
+
+    while True:
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                pygame.quit()
+                sys.exit()
+            
+            if event.type == pygame.MOUSEBUTTONDOWN:
+                if estado_menu == 'PROTOCOLO':
+                    if desenhar_botao(LARGURA // 2 - 100, 200, 200, 50, VERDE_DESTAQUE, "TCP", FONTE_PADRAO, FUNDO_ESCURO).collidepoint(event.pos):
+                        config['protocolo'] = 'tcp'
+                        estado_menu = 'MODO'
+                    elif desenhar_botao(LARGURA // 2 - 100, 300, 200, 50, VERDE_DESTAQUE, "UDP", FONTE_PADRAO, FUNDO_ESCURO).collidepoint(event.pos):
+                        config['protocolo'] = 'udp'
+                        estado_menu = 'MODO'
+                
+                elif estado_menu == 'MODO':
+                    if desenhar_botao(LARGURA // 2 - 100, 200, 200, 50, COR_O, "Hospedar", FONTE_PADRAO, BRANCO_CLARO).collidepoint(event.pos):
+                        config['modo'] = 'h'
+                        estado_menu = 'CONFIG_REDE'
+                    elif desenhar_botao(LARGURA // 2 - 100, 300, 200, 50, COR_X, "Conectar", FONTE_PADRAO, BRANCO_CLARO).collidepoint(event.pos):
+                        config['modo'] = 'c'
+                        estado_menu = 'CONFIG_REDE'
+                
+                elif estado_menu == 'CONFIG_REDE':
+                    if desenhar_caixa_texto(LARGURA // 2 - 150, 250, 300, 50, config['host'], False, FUNDO_ESCURO).collidepoint(event.pos):
+                        input_ativo = 'host'
+                    elif desenhar_caixa_texto(LARGURA // 2 - 150, 350, 300, 50, config['porta'], False, FUNDO_ESCURO).collidepoint(event.pos):
+                        input_ativo = 'porta'
+                    else:
+                        input_ativo = None
+                    
+                    if desenhar_botao(LARGURA // 2 - 100, ALTURA - 100, 200, 50, VERDE_DESTAQUE, "Iniciar Jogo", FONTE_PADRAO, FUNDO_ESCURO).collidepoint(event.pos):
+                        if config['host'] and config['porta'].isdigit():
+                            return config['modo'], config['protocolo'], config['host'], int(config['porta'])
+
+            if event.type == pygame.KEYDOWN and input_ativo:
+                if event.key == pygame.K_RETURN:
+                    input_ativo = None
+                elif event.key == pygame.K_BACKSPACE:
+                    if input_ativo == 'host':
+                        config['host'] = config['host'][:-1]
+                    elif input_ativo == 'porta':
+                        config['porta'] = config['porta'][:-1]
+                else:
+                    if input_ativo == 'host' and len(config['host']) < 39:
+                        config['host'] += event.unicode
+                    elif input_ativo == 'porta' and len(config['porta']) < 5 and event.unicode.isdigit():
+                        config['porta'] += event.unicode
 
