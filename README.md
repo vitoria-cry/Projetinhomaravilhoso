@@ -12,6 +12,8 @@ O projeto trata de uma aplicação de jogo da velha multiplayer, desenvolvida em
 1. Verifique se o python está instalado;
 2. Instale a biblioteca pygame - no terminal digite: pip install pygame;
 3. Execute o programa.
+
+
 #Como jogar:
 
 1. O menu vai aparecer:
@@ -22,4 +24,3 @@ O projeto trata de uma aplicação de jogo da velha multiplayer, desenvolvida em
 
 #Protocolo de camada de aplicação: 
 O código implementa um protocolo de camada de aplicação simples para um jogo da velha em rede P2P. Ele envia o estado do tabuleiro em JSON entre os jogadores usando TCP ou UDP, garantindo a sincronização dos turnos, mensagens de status e desconexões, enquanto a interface gráfica exibe o jogo.
-
