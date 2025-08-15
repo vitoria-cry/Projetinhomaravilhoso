@@ -422,4 +422,148 @@ def main_menu():
                         config['host'] += event.unicode
                     elif input_ativo == 'porta' and len(config['porta']) < 5 and event.unicode.isdigit():
                         config['porta'] += event.unicode
+                        desenhar_gradiente(TELA, FUNDO_ESCURO, CINZA_FUNDO)
+        desenhar_texto_centralizado(TELA, "Jogo da Velha em Rede", FONTE_TITULO, BRANCO_CLARO, 100)
+        
+        if estado_menu == 'PROTOCOLO':
+            desenhar_texto_centralizado(TELA, "Selecione o Protocolo", FONTE_PADRAO, BRANCO_CLARO, 150)
+            desenhar_botao(LARGURA // 2 - 100, 200, 200, 50, VERDE_DESTAQUE, "TCP", FONTE_PADRAO, FUNDO_ESCURO)
+            desenhar_botao(LARGURA // 2 - 100, 300, 200, 50, VERDE_DESTAQUE, "UDP", FONTE_PADRAO, FUNDO_ESCURO)
+        
+        elif estado_menu == 'MODO':
+            desenhar_texto_centralizado(TELA, "Selecione o Modo", FONTE_PADRAO, BRANCO_CLARO, 150)
+            desenhar_botao(LARGURA // 2 - 100, 200, 200, 50, COR_O, "Hospedar", FONTE_PADRAO, BRANCO_CLARO)
+            desenhar_botao(LARGURA // 2 - 100, 300, 200, 50, COR_X, "Conectar", FONTE_PADRAO, BRANCO_CLARO)
+
+        elif estado_menu == 'CONFIG_REDE':
+            desenhar_texto_centralizado(TELA, "Configurações de Rede", FONTE_PADRAO, BRANCO_CLARO, 150)
+            
+            desenhar_texto_centralizado(TELA, "Endereço IP:", FONTE_MENOR, BRANCO_CLARO, 230)
+            cor_borda_ip = COR_O if input_ativo == 'host' else BRANCO_CLARO
+            desenhar_caixa_texto(LARGURA // 2 - 150, 250, 300, 50, config['host'], input_ativo == 'host', cor_borda_ip)
+            
+            desenhar_texto_centralizado(TELA, "Porta:", FONTE_MENOR, BRANCO_CLARO, 330)
+            cor_borda_porta = COR_O if input_ativo == 'porta' else BRANCO_CLARO
+            desenhar_caixa_texto(LARGURA // 2 - 150, 350, 300, 50, config['porta'], input_ativo == 'porta', cor_borda_porta)
+
+            tipo_ip = get_ip_family(config['host'])
+            cor_ip = VERDE_DESTAQUE if tipo_ip in ['IPv4', 'IPv6'] else VERMELHO_DESTAQUE
+            desenhar_texto_centralizado(TELA, f"Tipo de IP: {tipo_ip}", FONTE_MENOR, cor_ip, 420)
+            
+            desenhar_botao(LARGURA // 2 - 100, ALTURA - 100, 200, 50, VERDE_DESTAQUE, "Iniciar Jogo", FONTE_PADRAO, FUNDO_ESCURO)
+
+        pygame.display.flip()
+        CLOCK.tick(30)
+
+# --- Loop principal do Jogo ---
+def jogo(modo, protocolo, host, porta):
+    global sock_comunicacao, oponente_addr, rodando_jogo, estado_jogo, conectado, thread_rede
+    
+    estado_jogo = {'tabuleiro': criar_tabuleiro(), 'vencedor': None, 'empate': False, 'turno': 'X', 'mensagens': []}
+    rodando_jogo = True
+    conectado = False
+    jogador = 'X' if modo == 'h' else 'O'
+    
+    sock, addr = criar_socket_comunicacao(protocolo, host, porta)
+    
+    if not sock:
+        rodando_jogo = False
+        return
+    
+    if protocolo == 'tcp':
+        if modo == 'h':
+            thread_rede = threading.Thread(target=thread_servidor_tcp, args=(sock, addr))
+        else:
+            thread_rede = threading.Thread(target=thread_cliente_tcp, args=(sock, addr))
+    else: # udp
+        if modo == 'h':
+            thread_rede = threading.Thread(target=thread_servidor_udp, args=(sock, addr))
+        else:
+            thread_rede = threading.Thread(target=thread_cliente_udp, args=(sock, addr))
+
+    thread_rede.daemon = True
+    thread_rede.start()
+
+    while rodando_jogo:
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                rodando_jogo = False
+            elif event.type == pygame.MOUSEBUTTONDOWN and estado_jogo['turno'] == jogador and not estado_jogo['vencedor'] and not estado_jogo['empate'] and conectado:
+                mx, my = pygame.mouse.get_pos()
+                linha = my // TAM_CELULA
+                coluna = mx // TAM_CELULA
+                if fazer_jogada(estado_jogo['tabuleiro'], linha, coluna, jogador):
+                    enviar_dados(sock_comunicacao, {'tabuleiro': estado_jogo['tabuleiro']}, protocolo, oponente_addr)
+                    estado_jogo['turno'] = 'O' if estado_jogo['turno'] == 'X' else 'X'
+        
+        with lock_rede:
+            vencedor = verificar_vencedor(estado_jogo['tabuleiro'])
+            empate = verificar_empate(estado_jogo['tabuleiro'])
+
+        desenhar_gradiente(TELA, FUNDO_ESCURO, CINZA_FUNDO)
+        desenhar_tabuleiro(TELA, estado_jogo['tabuleiro'])
+        
+        if vencedor or empate:
+            if vencedor:
+                mensagem = f"Jogador '{vencedor}' venceu!"
+                cor_vencedor = COR_X if vencedor == 'X' else COR_O
+                desenhar_texto_centralizado(TELA, mensagem, FONTE_TITULO, cor_vencedor, LARGURA + 50)
+            elif empate:
+                mensagem = "Empate!"
+                desenhar_texto_centralizado(TELA, mensagem, FONTE_TITULO, BRANCO_CLARO, LARGURA + 50)
+        else:
+            if conectado:
+                status_text = f"Sua vez: {jogador} | Vez: {estado_jogo['turno']}"
+                cor_turno = COR_X if estado_jogo['turno'] == 'X' else COR_O
+                desenhar_texto_centralizado(TELA, status_text, FONTE_PADRAO, cor_turno, LARGURA + 25)
+                
+                y_msg_start = LARGURA + 50
+                with lock_rede:
+                    mensagens_exibir = estado_jogo['mensagens'][-3:]
+                for i, msg in enumerate(mensagens_exibir):
+                    desenhar_texto_centralizado(TELA, msg, FONTE_MENOR, BRANCO_CLARO, y_msg_start + i * 20)
+            else:
+                with lock_rede:
+                    if estado_jogo['mensagens']:
+                        desenhar_texto_centralizado(TELA, estado_jogo['mensagens'][0], FONTE_PADRAO, BRANCO_CLARO, LARGURA + 50)
+        
+        pygame.display.flip()
+        CLOCK.tick(60)
+
+        if vencedor or empate:
+            while True:
+                for event in pygame.event.get():
+                    if event.type == pygame.QUIT:
+                        rodando_jogo = False
+                        if sock: sock.close()
+                        return
+                    elif event.type == pygame.KEYDOWN:
+                        if event.key == pygame.K_r:
+                            rodando_jogo = False
+                            if sock: sock.close()
+                            return
+                        elif event.key == pygame.K_ESCAPE:
+                            rodando_jogo = False
+                            if sock: sock.close()
+                            return
+                pygame.display.flip()
+    
+    if thread_rede and thread_rede.is_alive():
+        thread_rede.join(timeout=2)
+    
+    if sock:
+        sock.close()
+    
+    pygame.time.wait(2000)
+
+if __name__ == "__main__":
+    while True:
+        try:
+            modo, protocolo, host, porta = main_menu()
+            jogo(modo, protocolo, host, porta)
+        except Exception as e:
+            print(f"Erro crítico no jogo: {e}")
+            pygame.quit()
+            sys.exit()
+
 
